@@ -70,9 +70,10 @@ end
 
 MPCMD.safeCall = function(func,...)
 	local op = func
+  
 	if arg then 
 		op = function()
-			func(unpack(arg))
+			return func(unpack(arg))
 		end
 	end
 

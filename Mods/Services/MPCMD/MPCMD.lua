@@ -69,23 +69,6 @@ MPCMD.saveConfiguration = function()
     U.saveInFile(MPCMD.config, 'config', lfs.writedir()..'Config/MPCMD.lua')
 end
 
---error handler for xpcalls. wraps hitch_trooper.log_e:error
-MPCMD.catchError=function(err)
-	MPCMD.Logging.log(err)
-end 
-
-MPCMD.safeCall = function(func,args)
-	local op = func
-	if args then 
-		op = function()
-			func(unpack(args))
-		end
-	end
-	
-	local err, res = xpcall(op,MPCMD.catchError)
-
-	return res
-end
 
 --------------------------------------------------------------
 
@@ -181,7 +164,7 @@ MPCMD.loadCommandFolder = function(path)
 			local attr = lfs.attributes(fullpath)
 
 			if type(attr) == "table" and attr.mode == "file" then
-				MPCMD.safeCall(MPCMD.loadCommandFile, {fullpath})
+				MPCMD.safeCall(MPCMD.loadCommandFile, fullpath)
 			end
 		end
 	end
@@ -221,14 +204,23 @@ MPCMD.doOnPlayerConnect = function(id)
 
 	local name = MPCMD.getPlayerName(id)
 	local ucid = tostring(MPCMD.getPlayerUcid(id))
-	local permissions = MPCMD.Serialization.obj2str(MPCMD.config.users[ucid])
+	local userConfig = MPCMD.config.users[ucid]
+
+	local permissions = MPCMD.Serialization.obj2str(userConfig)
 	
-	MPCMD.Logging.log("Player connected: "..name..". Player ID: "..id .. ". UCID: ".. ucid .. ". Permissions: " .. permissions)
+	MPCMD.Logging.log({["Player connected"] = name, ["Player ID"]=id, ["UCID"]=ucid, ["Permissions"]=permissions})
 
-	MPCMD.playerMap[id] = MPCMD.config.users[ucid]
+	MPCMD.playerMap[id] = userConfig
 
-	MPCMD.Logging.log(MPCMD.playerMap)--TODO
-	MPCMD.Logging.log(MPCMD)--TODO
+	-- Save username to make config easier to read for the user
+	if userConfig then
+		userConfig.LastSeenUsername = name
+		MPCMD.saveConfiguration()
+
+		if MPCMD.AllowCommand(MPCMD.commands["CMD"],id) then
+			net.send_chat_to("MPCMD " .. _MpcmdVersion .. " running on this server. Type \"cmd\" in chat to start a session. Chat \"help\" during a session to list commands available to you.",id)
+		end
+	end
 end
 
 MPCMD.doOnPlayerDisconnect = function(id)
@@ -253,63 +245,68 @@ MPCMD.doOnPlayerTrySendChat = function(playerId, message)
 
 	local command = MPCMD.commands[tok]
 	if (not command) or (command.exec == nil) then 
-		MPCMD.Logging.log(result)--TODO
+
 		if session then
 			net.send_chat_to("Command not recognized.",playerId)
 		end
 		return result 
 	end
 
-	
-	MPCMD.Logging.log(MPCMD.playerMap)--TODO
-
 	-- Check session vs non session for the right place to exec this command
 	-- In either case get user permissions
-	local permissions
+
 	if command.nonSession then
 
 		if session then
 			net.send_chat_to("Command not valid here.",playerId)
 			return result 
-		else
-			permissions = MPCMD.playerMap[playerId]
 		end
 		
-	else
-		if session then 
-			permissions = session.levels
-		else 
-			return result 
-		end
+	elseif not session then 
+		return result 
 	end
 
 	-- message is confirmed a command in this context - suppress sending to others
 	result = ""
 
-	MPCMD.Logging.log(permissions)--TODO
+	-- MPCMD.Logging.log(permissions)
 
-	if permissions == nil then permissions = 0 end
-
-	if command.level then
-		local deny = false
-
-		if type(permissions) == "number" and command.level > permissions then
-			deny = true
-		elseif type(permissions) == "table" and not permissions[command.level] then 
-			deny = true
-		end
-
-		if deny then
-			net.send_chat_to("You do not have permission to use this command.",playerId)
-			return result 
-		end
-
+	if not MPCMD.AllowCommand(command, playerId) then
+		net.send_chat_to("You do not have permission to use this command.",playerId)
+		return result 
 	end
 	
-	command.exec(playerId, argMsg)
+	if command.exec(playerId, argMsg) then
+		net.send_chat_to(">>",playerId)
+	end
 
 	return result
 end
+
+MPCMD.AllowCommand = function(command,playerId)
+
+	if (not command) or (not command.level) then return false end
+
+	local permissions
+	local session = MPCMD.sessions[playerId] 
+
+	if session then 
+		permissions = session.levels
+	else	
+		permissions = MPCMD.playerMap[playerId]
+	end
+
+	local allow = false
+
+	if type(permissions) == "number" and command.level <= permissions then
+		allow = true
+	elseif type(permissions) == "table" and permissions[command.level] then 
+		allow = true
+	end
+
+	return allow
+end
+
 --------------------------------------------------------------
 -- CALLBACKS
 
@@ -335,12 +332,12 @@ end
  
 MPCMD.Handlers.onPlayerConnect = function(id)
 	if not DCS.isServer() or not DCS.isMultiplayer() then return end
-	MPCMD.safeCall(MPCMD.doOnPlayerConnect,{id})
+	MPCMD.safeCall(MPCMD.doOnPlayerConnect,id)
 end
 
 MPCMD.Handlers.onPlayerDisconnect = function(id)
 	if not DCS.isServer() or not DCS.isMultiplayer() then return end
-	MPCMD.safeCall(MPCMD.doOnPlayerDisconnect,{id})
+	MPCMD.safeCall(MPCMD.doOnPlayerDisconnect,id)
 end
 
 MPCMD.Handlers.onPlayerTrySendChat = function(playerId, message)
@@ -349,11 +346,13 @@ MPCMD.Handlers.onPlayerTrySendChat = function(playerId, message)
 	local result = message
 	if not MPCMD.Handlers.handlingPlayerTrySendChat then -- prevent recursive calls
 		MPCMD.Handlers.handlingPlayerTrySendChat = true
-		MPCMD.safeCall(MPCMD.doOnPlayerTrySendChat ,{playerId, message})
+
+		result = MPCMD.safeCall(MPCMD.doOnPlayerTrySendChat, playerId, message)
+
 		MPCMD.Handlers.handlingPlayerTrySendChat = false
 	end
 
-	return result
+	return result 
 end
 
 --------------------------------------------------------------
@@ -374,10 +373,12 @@ MPCMD.cmdStartSession = function(playerId)
 	end
 
 	MPCMD.sessions[playerId] = {sessionStart = os.date("%H:%M:%S"), levels = levels}
+	net.send_chat_to("<< MPCMD session start >>",playerId)
 
 	MPCMD.Logging.log("Start cmd session for player " .. playerId)
 
 	return true
+
 end
 
 -- MPCMD.cmdEndSession
@@ -385,14 +386,38 @@ MPCMD.cmdEndSession = function(playerId)
 
 	MPCMD.sessions[playerId] = nil
 
+	net.send_chat_to("<< MPCMD session end >>",playerId)
+
 	MPCMD.Logging.log("End cmd session for player " .. playerId)
 
+	return false
+end
+
+-- MPCMD.cmdHelp
+MPCMD.cmdHelp = function(playerId)
+
+	for k,v in pairs(MPCMD.commands) do
+		if  MPCMD.AllowCommand(v, playerId) then
+
+			if type(k) == "string" then 
+				local helpStr = k
+				if type(v.help) == "string" then
+					helpStr = helpStr .. " : " .. v.help
+				end
+
+				net.send_chat_to(helpStr,playerId)
+			end
+		end
+	end
+
 	return true
+
 end
 
 MPCMD.commands = {
 	["CMD"] = {level = 1, exec = MPCMD.cmdStartSession, help = "Start mpcmd session.", nonSession = true}
 	, ["X"] = {level = 1,exec = MPCMD.cmdEndSession, help = "Quit mpcmd session."}
+	, ["HELP"] = {level = 1,exec = MPCMD.cmdHelp, help = "Show command reference."}
 }
 
 net.log("MPCMD " .. _MpcmdVersion  .. " loaded")
