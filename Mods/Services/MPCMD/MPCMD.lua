@@ -17,6 +17,22 @@ local DialogLoader      = require('DialogLoader')
 local Static            = require('Static')
 local Tools             = require('tools')
 
+--TODO: example of password hashing
+
+hash = net.hash_password("Pass")
+MPCMD.Logging.log(hash)
+if net.check_password("Pass",hash) then
+	MPCMD.Logging.log("match")
+else
+	MPCMD.Logging.log("no match")
+end
+
+if net.check_password("Fail",hash) then
+	MPCMD.Logging.log("match")
+else
+	MPCMD.Logging.log("no match")
+end
+--------------------------------
 package.path = package.path .. [[;]] .. lfs.writedir() .. [[Mods\Services\MPCMD\?.lua;]]
 
 require([[MPCMD_serialization]])
@@ -28,7 +44,13 @@ if MPCMD == nil then
 	MPCMD = {}
 end
 
-MPCMD.config = {["users"] = {}}
+MPCMD.passwordScope =
+{
+	PER_SESSION = 1
+	,PER_USER = 2
+}
+
+MPCMD.config = {["users"] = { --[[ [ucid]={level = n, lastSeenUsername = k} ]]},["levels"] = { --[[ [level] = { password = "plaintext", passwordHash = "hashed", passwordScope = n } ]] }}
 MPCMD.commandFileDirs = {lfs.writedir()..[[Mods\Services\MPCMD\CoreCommands]] , lfs.writedir()..[[Mods\Services\MPCMD\AddonCommands]]}
 MPCMD.commands = {}
 MPCMD.sessions = {}
@@ -92,6 +114,16 @@ MPCMD.splitToken = function(str)
 
 	return match, rem
 end
+
+MPCMD.splitCommand = function(str)
+	local tok,argMsg = MPCMD.splitToken(str)
+
+	if not tok then return nil, nil end
+
+	tok = string.upper(tok)
+
+	return MPCMD.commands[tok], argMsg
+end
 --------------------------------------------------------------
 MPCMD.getPlayerUcid = function(id)
 	if DCS.isServer() then 
@@ -108,6 +140,90 @@ MPCMD.getPlayerName = function(id)
 	return name
 end
 
+-- Set a new user config for the identified player
+-- Adds some additional detail to the config
+-- Saves the config
+MPCMD.setUserConfig = function(playerId, userConfig)
+
+	local name = MPCMD.getPlayerName(playerId)
+	local ucid = tostring(MPCMD.getPlayerUcid(playerId))
+
+	MPCMD.playerMap[playerId] = userConfig
+
+	-- Save username to make config easier to read for the user
+	if userConfig then
+		userConfig.LastSeenUsername = name
+	end
+
+	if ucid ~= nil then
+		MPCMD.config.users[ucid] = userConfig 
+	end
+	MPCMD.saveConfiguration()
+end
+
+--------------------------------------------------------------
+-- CMD session handler
+
+-- result, session.handler = session.handler(playerId, message)
+MPCMD.defaultSessionHandler = function(playerId, message)
+	-- local tok,argMsg = MPCMD.splitToken(message)
+
+	-- if not tok then return result end
+
+	-- tok = string.upper(tok)
+
+	-- local command = MPCMD.commands[tok]
+	-- if (not command) or (command.exec == nil) then 
+
+	-- 	if session then
+	-- 		net.send_chat_to("Command not recognized.",playerId)
+	-- 	end
+	-- 	return result 
+	-- end
+
+	-- -- Check session vs non session for the right place to exec this command
+	-- -- In either case get user permissions
+
+	-- if command.nonSession then
+
+	-- 	if session then
+	-- 		net.send_chat_to("Command not valid here.",playerId)
+	-- 		return result 
+	-- 	end
+		
+	-- elseif not session then 
+	-- 	return result 
+	-- end
+
+	-- -- message is confirmed a command in this context - suppress sending to others
+	-- result = ""
+
+	-- -- MPCMD.Logging.log(permissions)
+
+	-- if not MPCMD.AllowCommand(command, playerId) then
+	-- 	net.send_chat_to("You do not have permission to use this command.",playerId)
+	-- 	return result 
+	-- end
+	
+	-- if command.exec(playerId, argMsg) then
+	-- 	net.send_chat_to(">>",playerId)
+	-- end
+
+	-- return result
+end
+
+MPCMD.nonSessionHandler = function(playerId, message)
+
+	local command, argMsg = MPCMD.splitCommand(message)
+
+	if (not command) or (command.exec == nil) or (not command.nonSession) then 
+		return message, nil
+	end
+	
+	command.exec(playerId, argMsg) -- TODO add option to change a handler (or just make CMD a command for all > starts a session > prompt for auth - exit session on auth fail)
+
+	return "", nil
+end
 --------------------------------------------------------------
 -- CALLBACK EXECUTABLES
 
@@ -200,27 +316,17 @@ end
 
 MPCMD.doOnPlayerConnect = function(id)
 
-	MPCMD.loadConfiguration()
+	--MPCMD.loadConfiguration()
+
+	-- Adds username to user config and re-syncs to config file
+	MPCMD.setUserConfig( MPCMD.config.users[ucid], id)
 
 	local name = MPCMD.getPlayerName(id)
 	local ucid = tostring(MPCMD.getPlayerUcid(id))
-	local userConfig = MPCMD.config.users[ucid]
-
-	local permissions = MPCMD.Serialization.obj2str(userConfig)
 	
-	MPCMD.Logging.log({["Player connected"] = name, ["Player ID"]=id, ["UCID"]=ucid, ["Permissions"]=permissions})
+	MPCMD.Logging.log({["Player connected"] = name, ["Player ID"]=id, ["UCID"]=ucid})
 
-	MPCMD.playerMap[id] = userConfig
-
-	-- Save username to make config easier to read for the user
-	if userConfig then
-		userConfig.LastSeenUsername = name
-		MPCMD.saveConfiguration()
-
-		if MPCMD.AllowCommand(MPCMD.commands["CMD"],id) then
-			net.send_chat_to("MPCMD " .. _MpcmdVersion .. " running on this server. Type \"cmd\" in chat to start a session. Chat \"help\" during a session to list commands available to you.",id)
-		end
-	end
+	net.send_chat_to("MPCMD " .. _MpcmdVersion .. " running on this server. Type \"cmd\" in chat to start a session. Chat \"help\" during a session to list commands available to you.",id)
 end
 
 MPCMD.doOnPlayerDisconnect = function(id)
@@ -234,50 +340,20 @@ end
 MPCMD.doOnPlayerTrySendChat = function(playerId, message)
 
 	local session = MPCMD.sessions[playerId] 
-	local result = message
-	if session then result = "" end -- consume chat messages during a session (even invalid commands)
 
-	local tok,argMsg = MPCMD.splitToken(message)
+	local result
 
-	if not tok then return result end
+	--if session then result = "" end -- consume chat messages during a session (even invalid commands)
+	----------------------------------------------
 
-	tok = string.upper(tok)
-
-	local command = MPCMD.commands[tok]
-	if (not command) or (command.exec == nil) then 
-
-		if session then
-			net.send_chat_to("Command not recognized.",playerId)
+	if session then
+		if session.handler then
+			result, session.handler = session.handler(playerId, message)
+		else
+			result, session.handler = MPCMD.defaultSessionHandler(playerId, message) -- TODO
 		end
-		return result 
-	end
-
-	-- Check session vs non session for the right place to exec this command
-	-- In either case get user permissions
-
-	if command.nonSession then
-
-		if session then
-			net.send_chat_to("Command not valid here.",playerId)
-			return result 
-		end
-		
-	elseif not session then 
-		return result 
-	end
-
-	-- message is confirmed a command in this context - suppress sending to others
-	result = ""
-
-	-- MPCMD.Logging.log(permissions)
-
-	if not MPCMD.AllowCommand(command, playerId) then
-		net.send_chat_to("You do not have permission to use this command.",playerId)
-		return result 
-	end
-	
-	if command.exec(playerId, argMsg) then
-		net.send_chat_to(">>",playerId)
+	else
+		result, session.handler = MPCMD.nonSessionHandler(playerId, message) -- TODO
 	end
 
 	return result
@@ -287,24 +363,53 @@ MPCMD.AllowCommand = function(command,playerId)
 
 	if (not command) or (not command.level) then return false end
 
-	local permissions
+	local requiredLevel = command.level
+
+	local userLevel
 	local session = MPCMD.sessions[playerId] 
+	local userConfig = MPCMD.playerMap[playerId]
 
 	if session then 
-		permissions = session.levels
-	else	
-		permissions = MPCMD.playerMap[playerId]
+		userLevel = session.level
+	elseif userConfig  then	
+		userLevel = userConfig.level
 	end
 
-	local allow = false
+	if type(userLevel) ~= "number" then
+		userLevel = 0
+	end
+		
+	if requiredLevel <= userLevel then return true end
 
-	if type(permissions) == "number" and command.level <= permissions then
-		allow = true
-	elseif type(permissions) == "table" and permissions[command.level] then 
-		allow = true
+	-- Check whether user can escalate with a password
+	local levelPassword = MPCMD.levels[requiredLevel]
+
+	if levelPassword and MPCMD.PromptPassword(playerId, levelPassword.passwordHash) then
+
+		if levelPassword.passwordScope == MPCMD.passwordScope.PER_SESSION then
+
+			session.level = requiredLevel
+
+		elseif levelPassword.passwordScope == MPCMD.passwordScope.PER_USER then
+
+			if not userConfig then
+				userConfig = {}
+			end
+
+			userConfig.level = requiredLevel
+
+			-- Complete user config and save
+			MPCMD.setUserConfig(playerId, userConfig)
+		end
+
+		return true
 	end
 
-	return allow
+	return false
+end
+
+MPCMD.PromptPassword = function(playerId, hashedPassword)
+	net.send_chat_to("Enter password >>",playerId)
 end
 
 --------------------------------------------------------------
@@ -366,13 +471,13 @@ DCS.setUserCallbacks(MPCMD.Handlers)
 Return true to halt chat message processing.
 ]]
 MPCMD.cmdStartSession = function(playerId)
-	local levels
+	local level
 
-	if MPCMD.playerMap ~= nil then
-		levels = MPCMD.playerMap[playerId]
+	if MPCMD.playerMap ~= nil and MPCMD.playerMap[playerId] ~= nil then
+		level = MPCMD.playerMap[playerId].level
 	end
 
-	MPCMD.sessions[playerId] = {sessionStart = os.date("%H:%M:%S"), levels = levels}
+	MPCMD.sessions[playerId] = {sessionStart = os.date("%H:%M:%S"), level = level}
 	net.send_chat_to("<< MPCMD session start >>",playerId)
 
 	MPCMD.Logging.log("Start cmd session for player " .. playerId)
