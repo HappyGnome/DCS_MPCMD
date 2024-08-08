@@ -2,8 +2,6 @@ local _MpcmdVersion = "v1.0"
 
 net.log("MPCMD " .. _MpcmdVersion  .. " loading...")
 
-
-
 local base = _G
 
 local lfs               = require('lfs')
@@ -17,22 +15,6 @@ local DialogLoader      = require('DialogLoader')
 local Static            = require('Static')
 local Tools             = require('tools')
 
---TODO: example of password hashing
-
--- hash = net.hash_password("Pass")
--- MPCMD.Logging.log(hash)
--- if net.check_password("Pass",hash) then
--- 	MPCMD.Logging.log("match")
--- else
--- 	MPCMD.Logging.log("no match")
--- end
-
--- if net.check_password("Fail",hash) then
--- 	MPCMD.Logging.log("match")
--- else
--- 	MPCMD.Logging.log("no match")
--- end
---------------------------------
 package.path = package.path .. [[;]] .. lfs.writedir() .. [[Mods\Services\MPCMD\?.lua;]]
 
 require([[MPCMD_serialization]])
@@ -50,11 +32,12 @@ MPCMD.passwordScope =
 	,PER_USER = 2
 }
 
-MPCMD.config = {["users"] = { --[[ [ucid]={level = n, lastSeenUsername = k} ]]},["levels"] = { --[[ [level] = { password = "plaintext", passwordHash = "hashed", passwordScope = n } ]] }}
+MPCMD.config = {["users"] = { --[[ [ucid]={level = n, lastSeenUsername = k} ]]},["levels"] = { --[[ [level] = { password = "plaintext", passwordHash = "hashed", passwordScope = n } ]] }, ["options"] = {rateLimitCount = 20, rateLimitSeconds = 60}}
 MPCMD.commandFileDirs = {lfs.writedir()..[[Mods\Services\MPCMD\CoreCommands]] , lfs.writedir()..[[Mods\Services\MPCMD\AddonCommands]]}
 MPCMD.commands = {}
 MPCMD.sessions = {}
 MPCMD.playerMap = {} -- key = playerId, value = value of config.users[ucid] for the player's ucid
+MPCMD.rateLimit = {} -- key = playerId, value = {count = n, epoch = t} TODO
 MPCMD.config_loaded = false
 
 if  MPCMD.Handlers ~= nil then
@@ -81,9 +64,6 @@ MPCMD.loadConfiguration = function()
 			end
 		end        
     end
-
-	MPCMD.Logging.log(MPCMD.config) -- TODO
-	MPCMD.Logging.log(cfg.config) -- TODO
 
 	-- hash passwords
 	for k,v in pairs(MPCMD.config.levels) do
@@ -518,12 +498,12 @@ MPCMD.doOnPlayerTrySendChat = function(playerId, message)
 		if session.handler then
 			result, newHandler = session.handler(playerId, message)
 		else
-			result, newHandler = MPCMD.defaultSessionHandler(playerId, message) -- TODO
+			result, newHandler = MPCMD.defaultSessionHandler(playerId, message)
 		end
 
 		MPCMD.setSessionNextHandler(playerId, newHandler)
 	else
-		result, _ = MPCMD.nonSessionHandler(playerId, message) -- TODO
+		result, _ = MPCMD.nonSessionHandler(playerId, message)
 	end
 
 	if type(result) ~= "string" then result = "" end
