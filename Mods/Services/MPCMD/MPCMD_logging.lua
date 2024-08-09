@@ -69,15 +69,24 @@ MPCMD.Logging.catchError=function(err)
 end 
 
 MPCMD.safeCall = function(func,...)
-	local op = func
+	local op
   
 	if arg then 
 		op = function()
-			return func(unpack(arg))
+			return {func(unpack(arg))}
+		end
+  else
+    op = function()
+			return {func()}
 		end
 	end
 
   local err, res = xpcall(op,MPCMD.Logging.catchError)
 
-	return res
+  if type(res) == 'table' then
+	  return unpack(res)
+  else
+    return nil
+  end
+
 end
