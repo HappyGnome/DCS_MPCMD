@@ -32,12 +32,12 @@ MPCMD.passwordScope =
 	,PER_USER = 2
 }
 
-MPCMD.config = {["users"] = { --[[ [ucid]={level = n, lastSeenUsername = k} ]]},["levels"] = { --[[ [level] = { password = "plaintext", passwordHash = "hashed", passwordScope = n } ]] }, ["options"] = {rateLimitCount = 20, rateLimitSeconds = 60}}
+MPCMD.config = {["users"] = { --[[ [ucid]={level = n, lastSeenUsername = k} ]]},["levels"] = { --[[ [level] = { password = "plaintext", passwordHash = "hashed", passwordScope = n } ]] }, ["options"] = {rateLimitCount = 10, rateLimitSeconds = 60}}
 MPCMD.commandFileDirs = {lfs.writedir()..[[Mods\Services\MPCMD\CoreCommands]] , lfs.writedir()..[[Mods\Services\MPCMD\AddonCommands]]}
 MPCMD.commands = {}
 MPCMD.sessions = {}
 MPCMD.playerMap = {} -- key = playerId, value = value of config.users[ucid] for the player's ucid
-MPCMD.rateLimit = {} -- key = playerId, value = {count = n, epoch = t} TODO
+MPCMD.rateLimit = {} -- key = playerId, value = {count = n, epoch = t}
 MPCMD.config_loaded = false
 
 if  MPCMD.Handlers ~= nil then
@@ -49,6 +49,9 @@ end
 
 -----------------------------------------------------------
 -- CONFIG & UTILITY
+
+ -- TODO fix issue with forgetting user permissions between games.
+ -- TODO dofile not working
 
 MPCMD.loadConfiguration = function()
 	if MPCMD.config_loaded then return end
@@ -138,6 +141,9 @@ end
 -- Saves the config
 MPCMD.setUserConfig = function(playerId, userConfig)
 
+	MPCMD.Logging.log("Set user config")
+	MPCMD.Logging.log(userConfig)
+
 	local name = MPCMD.getPlayerName(playerId)
 	local ucid = tostring(MPCMD.getPlayerUcid(playerId))
 
@@ -153,6 +159,22 @@ MPCMD.setUserConfig = function(playerId, userConfig)
 	end
 	MPCMD.saveConfiguration()
 end
+
+MPCMD.blockForRate = function(playerId)
+	local now =  os.clock()
+	if MPCMD.rateLimit[playerId] == nil or MPCMD.rateLimit[playerId].epoch + MPCMD.config.options.rateLimitSeconds <= now then
+		MPCMD.rateLimit[playerId] = {count = 1, epoch = now}
+	else 
+		MPCMD.rateLimit[playerId].count = MPCMD.rateLimit[playerId].count + 1
+	end
+
+	if MPCMD.rateLimit[playerId].count > MPCMD.config.options.rateLimitCount then
+		net.send_chat_to("Too many requests. Please wait and try again.",playerId)
+		return true
+	end
+
+	return false
+end
 --------------------------------------------------------------
 -- CMD session handler
 
@@ -166,11 +188,13 @@ MPCMD.defaultSessionHandler = function(playerId, message)
 		return "", nil
 	end
 
+	if (not command.noRateLimit) and MPCMD.blockForRate(playerId) then return "", nil end
+
 	local levelConfig = MPCMD.config.levels[command.level]
 
 	if MPCMD.getCurrentPlayerLevel(playerId) >= command.level then
 
-		return command.exec(playerId, argMsg)
+		return "", command.exec(playerId, argMsg)
 
 	elseif levelConfig and levelConfig.passwordHash then
 
@@ -178,7 +202,7 @@ MPCMD.defaultSessionHandler = function(playerId, message)
 
 			net.send_chat_to("Password incorrect",id)
 
-			return "", nil
+			return nil
 		end
 		
 		return "", MPCMD.makePasswordHandler(playerId, argMsg,  levelConfig, command, failCmd)
@@ -222,17 +246,15 @@ MPCMD.nonSessionHandler = function(playerId, message)
 		return message, nil
 	end
 
+	if (not command.noRateLimit) and MPCMD.blockForRate(playerId) then return "", nil end
+
 	local levelConfig = MPCMD.config.levels[command.level]
 
 	if MPCMD.getCurrentPlayerLevel(playerId) >= command.level then
 
 		MPCMD.startSession(playerId)
-
-		local msgOverride, handlerOverride = command.exec(playerId, argMsg)
 		
-		MPCMD.setSessionNextHandler(playerId, handlerOverride) -- Simulate command being executed from within a session (this is what happens if a password is required first)
-
-		return msgOverride, nil
+		MPCMD.setSessionNextHandler(playerId, command.exec(playerId, argMsg)) -- Simulate command being executed from within a session (this is what happens if a password is required first)
 
 	elseif levelConfig and levelConfig.passwordHash then
 
@@ -241,7 +263,7 @@ MPCMD.nonSessionHandler = function(playerId, message)
 
 			net.send_chat_to("Password incorrect",id)
 
-			return "", nil
+			return nil
 		end
 		
 		MPCMD.startSession(playerId, MPCMD.makePasswordHandler(playerId, argMsg,  levelConfig, command, failCmd))
@@ -256,7 +278,7 @@ MPCMD.makePasswordHandler = function(playerId, argMsg, levelConfig, command, fai
 	net.send_chat_to("Enter password >> ",playerId)
 
 	local inputHandler = function(inPlayerId, message)
-		if net.check_password(message, levelConfig.passwordHash) then -- TODO add rate limit
+		if net.check_password(message, levelConfig.passwordHash) then
 
 			local passwordScope = MPCMD.passwordScope.PER_SESSION
 
@@ -290,6 +312,8 @@ MPCMD.promotePlayer = function (playerId, newLevel, scope)
 		MPCMD.sessions[playerId].level = newLevel
 
 	elseif scope == MPCMD.passwordScope.PER_USER then
+
+		local userConfig = MPCMD.playerMap[playerId]
 
 		if not userConfig then
 			userConfig = {}
@@ -340,8 +364,11 @@ end
 MPCMD.loadCommandFile= function(path)
 	MPCMD.Logging.log("Loading command file "..path)
 
-	local obj = dofile(path)
+	MPCMD.cmd = nil
 
+	MPCMD.safeCall(function() return dofile(path) end)
+
+	local obj = MPCMD.cmd
 	-- validation
 
 	if not obj then 
@@ -365,63 +392,8 @@ MPCMD.loadCommandFile= function(path)
 	MPCMD.commands[obj.cmd] = {level = obj.level, exec = obj.exec}
 end
 
-
--- MPCMD.AllowCommand = function(command,playerId)
-
--- 	if (not command) or (not command.level) then return false end
-
--- 	local requiredLevel = command.level
-
--- 	local userLevel = MPCMD.getCurrentPlayerLevel(playerId)
--- 	-- local session = MPCMD.sessions[playerId] 
--- 	-- local userConfig = MPCMD.playerMap[playerId]
-
--- 	-- if session then 
--- 	-- 	userLevel = session.level
--- 	-- elseif userConfig  then	
--- 	-- 	userLevel = userConfig.level
--- 	-- end
-
--- 	-- if type(userLevel) ~= "number" then
--- 	-- 	userLevel = 0
--- 	-- end
-		
--- 	if requiredLevel <= userLevel then return true end
-
--- 	-- Check whether user can escalate with a password
--- 	local levelPassword = MPCMD.levels[requiredLevel]
-
--- 	if levelPassword and MPCMD.PromptPassword(playerId, levelPassword.passwordHash) then
-
--- 		if levelPassword.passwordScope == MPCMD.passwordScope.PER_SESSION then
-
--- 			session.level = requiredLevel
-
--- 		elseif levelPassword.passwordScope == MPCMD.passwordScope.PER_USER then
-
--- 			if not userConfig then
--- 				userConfig = {}
--- 			end
-
--- 			userConfig.level = requiredLevel
-
--- 			-- Complete user config and save
--- 			MPCMD.setUserConfig(playerId, userConfig)
--- 		end
-
--- 		return true
--- 	end
-
--- 	return false
--- end
 --------------------------------------------------------------
 -- CALLBACK EXECUTABLES
-
--- MPCMD.doOnMissionLoadBegin = function()
--- 	MPCMD.loadConfiguration()
-
--- 	MPCMD.Logging.log("Mission "..DCS.getMissionName().." loading")
--- end
 
 MPCMD.doOnMissionLoadEnd = function()
 	MPCMD.Logging.log("Mission "..DCS.getMissionName().." loaded")
@@ -432,43 +404,17 @@ MPCMD.doOnMissionLoadEnd = function()
 		MPCMD.loadCommandFolder(v)
 	end
 
-	-- if MPCMD.config.restarts then
-
-	-- 	local secondsInWeek = os.time()%604800;
-	-- 	MPCMD.nextRestart = nil
-
-	-- 	--config.restarts = [{weekday = n,hour = m, minute = 0},...]
-	-- 	-- weekday = 1 for Sunday
-	-- 	for k,v in pairs(MPCMD.config.restarts) do
-	-- 		local secondsInWeekRestart = ((v.weekday + 2)%7) * 86400 -- Epoch was a Thursday, v.weekday = 5 for Thursday
-	-- 		if v.hour then
-	-- 			secondsInWeekRestart = secondsInWeekRestart + (v.hour%24)*3600
-	-- 			if v.minute then
-	-- 				secondsInWeekRestart = secondsInWeekRestart + (v.minute%60) * 60
-	-- 			end
-	-- 		end
-	-- 		if secondsInWeekRestart<secondsInWeek then secondsInWeekRestart = secondsInWeekRestart + 604800 end
-	-- 		if MPCMD.nextRestart == nil or secondsInWeekRestart < MPCMD.nextRestart then
-	-- 			MPCMD.nextRestart = secondsInWeekRestart
-	-- 		end
-	-- 	end	
-	-- 	-- MPCMD.nextRestart is now correct relative to week start
-	-- 	if MPCMD.nextRestart then
-	-- 		MPCMD.nextRestart = MPCMD.nextRestart + os.time() - secondsInWeek
-	-- 		net.dostring_in('server','trigger.action.outText(\"Mission scheduled to run until '.. os.date('%c',MPCMD.nextRestart) ..'\",10)')
-	-- 	end
-	-- end
 end
 
 MPCMD.doOnPlayerConnect = function(id)
 
 	--MPCMD.loadConfiguration()
 
-	-- Adds username to user config and re-syncs to config file
-	MPCMD.setUserConfig(id, MPCMD.config.users[ucid])
-
 	local name = MPCMD.getPlayerName(id)
 	local ucid = tostring(MPCMD.getPlayerUcid(id))
+
+	-- Adds username to user config and re-syncs to config file
+	MPCMD.setUserConfig(id, MPCMD.config.users[ucid])
 	
 	MPCMD.Logging.log({["Player connected"] = name, ["Player ID"]=id, ["UCID"]=ucid})
 
@@ -496,14 +442,18 @@ MPCMD.doOnPlayerTrySendChat = function(playerId, message)
 		local newHandler
 
 		if session.handler then
-			result, newHandler = session.handler(playerId, message)
+			result, newHandler = MPCMD.safeCall(session.handler, playerId, message)
 		else
-			result, newHandler = MPCMD.defaultSessionHandler(playerId, message)
+			result, newHandler = MPCMD.safeCall(MPCMD.defaultSessionHandler, playerId, message)
+		end
+
+		if newHandler then -- TODO
+			MPCMD.Logging.log("handler set")
 		end
 
 		MPCMD.setSessionNextHandler(playerId, newHandler)
 	else
-		result, _ = MPCMD.nonSessionHandler(playerId, message)
+		result, _ = MPCMD.safeCall(MPCMD.nonSessionHandler, playerId, message)
 	end
 
 	if type(result) ~= "string" then result = "" end
@@ -523,11 +473,6 @@ MPCMD.Handlers = {
 -- 	if not DCS.isServer() or not DCS.isMultiplayer() then return end
 -- 	MPCMD.safeCall(MPCMD.doOnMissionLoadBegin)
 -- end
-
-MPCMD.Handlers.onMissionLoadEnd = function()
-	if not DCS.isServer() or not DCS.isMultiplayer() then return end
-	MPCMD.safeCall(MPCMD.doOnMissionLoadEnd)
-end
 
 MPCMD.Handlers.onMissionLoadEnd = function()
 	if not DCS.isServer() or not DCS.isMultiplayer() then return end
@@ -560,6 +505,8 @@ MPCMD.Handlers.onPlayerTrySendChat = function(playerId, message)
 end
 
 --------------------------------------------------------------
+MPCMD.loadConfiguration()
+
 DCS.setUserCallbacks(MPCMD.Handlers)
 
 
@@ -575,7 +522,7 @@ MPCMD.cmdSessionStarted = function(playerId)
 
 	MPCMD.Logging.log("Start cmd session for player " .. playerId)
 
-	return "", nil
+	return nil
 
 end
 
@@ -588,7 +535,7 @@ MPCMD.cmdEndSession = function(playerId)
 
 	MPCMD.Logging.log("End cmd session for player " .. playerId)
 
-	return "", nil
+	return nil
 end
 
 -- MPCMD.cmdHelp
@@ -607,16 +554,14 @@ MPCMD.cmdHelp = function(playerId)
 
 	end
 
-	return "", nil
+	return nil
 
 end
 
 MPCMD.commands = {
 	["cmd"] = {level = 1, exec = MPCMD.cmdSessionStarted, help = "Start mpcmd session.", nonSession = true}
-	, ["x"] = {level = 1,exec = MPCMD.cmdEndSession, help = "Quit mpcmd session."}
+	, ["x"] = {level = 0, exec = MPCMD.cmdEndSession, help = "Quit mpcmd session.", noRateLimit = true}
 	, ["help"] = {level = 1,exec = MPCMD.cmdHelp, help = "Show command reference."}
 }
-
-MPCMD.loadConfiguration()
 
 net.log("MPCMD " .. _MpcmdVersion  .. " loaded")
