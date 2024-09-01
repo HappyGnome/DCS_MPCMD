@@ -23,7 +23,7 @@ require([[MPCMD_logging]])
 MPCMD.Logging.log("MPCMD " .. _MpcmdVersion  .. " loading...")
 
 -----------------------------------------------------------
--- MODULE INIT AND CORE VVARIABLES
+-- MODULE INIT AND CORE VARIABLES
 
 if MPCMD == nil then
 	MPCMD = {}
@@ -36,7 +36,8 @@ MPCMD.passwordScope =
 }
 
 MPCMD.config = {["users"] = { --[[ [ucid]={level = n, lastSeenUsername = k} ]]},["levels"] = { --[[ [level] = { password = "plaintext", passwordHash = "hashed", passwordScope = n } ]] }, ["options"] = {rateLimitCount = 10, rateLimitSeconds = 60}}
-MPCMD.commandFileDirs = {lfs.writedir()..[[Mods\Services\MPCMD\AddonCommands]]}
+MPCMD.commandFileDirs = {lfs.writedir()..[[Mods\Services\MPCMD\AddonCommands\Def]]}
+MPCMD.missionInjectDirs = {lfs.writedir()..[[Mods\Services\MPCMD\AddonCommands\MissionInject]]}
 MPCMD.commands = {}
 MPCMD.sessions = {}
 MPCMD.playerMap = {} -- key = playerId, value = value of config.users[ucid] for the player's ucid
@@ -48,6 +49,9 @@ if  MPCMD.Handlers ~= nil then
 		MPCMD.Handlers[k] = nil
 	end
 end
+
+MPCMD.scrEnvMission = "mission"
+MPCMD.scrEnvServer = "server"
 
 
 -----------------------------------------------------------
@@ -396,6 +400,8 @@ MPCMD.defaultSessionHandler = function(playerId, message)
 
 	if MPCMD.getCurrentPlayerLevel(playerId) >= command.level then
 
+		MPCMD.Logging.log("Player ".. playerId .. " runs command " .. command.cmd)
+
 		return "", command.exec(playerId, argMsg)
 
 	elseif levelConfig and levelConfig.passwordHash then
@@ -510,6 +516,32 @@ end
 -- COMMAND LOADING
 
 --[[ 
+MPCMD.execOnFiles
+
+Execute a function on each file in a folder
+
+Args:
+	path (string)
+Returns:
+	nil
+]]
+MPCMD.execOnFiles = function(path, func)
+	for relpath in lfs.dir(path) do
+		if relpath ~= "." and relpath ~= ".." then
+
+			local fullpath = path .. "/" .. relpath
+
+			local attr = lfs.attributes(fullpath)
+
+			if type(attr) == "table" and attr.mode == "file" then
+				MPCMD.safeCall(func, fullpath)
+			end
+		end
+	end
+
+end
+
+--[[ 
 MPCMD.loadCommandFolder
 
 Load commands from all files in a specified directory
@@ -520,18 +552,8 @@ Returns:
 	nil
 ]]
 MPCMD.loadCommandFolder = function(path)
-	for relpath in lfs.dir(path) do
-		if relpath ~= "." and relpath ~= ".." then
 
-			local fullpath = path .. "/" .. relpath
-
-			local attr = lfs.attributes(fullpath)
-
-			if type(attr) == "table" and attr.mode == "file" then
-				MPCMD.safeCall(MPCMD.loadCommandFile, fullpath)
-			end
-		end
-	end
+	MPCMD.execOnFiles(path, MPCMD.loadCommandFile)
 end
 
 --[[ 
@@ -572,7 +594,47 @@ MPCMD.loadCommandFile = function(path)
 		return
 	end
 
-	MPCMD.commands[obj.cmd] = {level = obj.level, exec = obj.exec}
+	MPCMD.commands[obj.cmd] = {level = obj.level, exec = obj.exec, cmd = obj.cmd}
+end
+
+--[[ 
+MPCMD.loadMissionInjectFolder
+
+Load scripts to inject from all files in a specified directory
+
+Args:
+	path (string)
+Returns:
+	nil
+]]
+MPCMD.loadMissionInjectFolder = function(path)
+	MPCMD.execOnFiles(path, MPCMD.injectMissionScript)
+end
+
+--[[ 
+MPCMD.injectMissionScript
+
+Load content of specified file and execute it in the mission environment
+
+Args:
+	filepath (string)
+Returns:
+	nil
+]]
+MPCMD.injectMissionScript = function(filepath)
+	
+	local file = assert(io.open(filepath, "r"))
+	local injectContent = file:read("*all")
+    file:close()
+
+	local execString = 
+	[[
+		a_do_script("]] .. MPCMD.Serialization.escapeLuaString(injectContent) .. [[")
+	]]
+
+	net.dostring_in(MPCMD.scrEnvMission, execString)
+
+
 end
 
 --------------------------------------------------------------
@@ -585,6 +647,10 @@ MPCMD.doOnMissionLoadEnd = function()
 
 	for _,v in ipairs(MPCMD.commandFileDirs) do
 		MPCMD.loadCommandFolder(v)
+	end
+
+	for _,v in ipairs(MPCMD.missionInjectDirs) do
+		MPCMD.loadMissionInjectFolder(v)
 	end
 
 	MPCMD.sessions = {} -- Don't carry sessions between missions
