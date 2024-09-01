@@ -16,7 +16,7 @@ MPCMD.cmd =
 
             local execString = 
             [[
-                a_do_script("MPCMD.cmdShowflags(\"]] .. MPCMD.Serialization.escapeLuaString(playerName) .. [[\")")
+                a_do_script("MPCMD.cmdFlagList(\"]] .. MPCMD.Serialization.escapeLuaString(playerName,2) .. [[\")")
             ]]
             
             MPCMD.Logging.log("Exec: ".. execString)

@@ -11,45 +11,10 @@ if not MPCMD.flags then
 end
 
 --------------------------------------------------------------
--- Flag registration API
-
-
---[[
-MPCMD.registerFlag
-
-Add a mission scripting flag that can be set via MPCMD
-
-Args:	
-	- flagname - (string or int) - matches the identity of the flag in mission scripting
-    - description - string - shown to the MPCMD user when listing flags
-    - alias - string (optional) - this is the value entered into MPCMD to interact with the flag
-Returns: 
-    nil
-]]
-MPCMD.registerFlag = function(flagname, description, alias)
-
-    if not flagname then
-        env.error("MPCMD.registerFlag: Invalid flag name",false)
-        return
-    end
-
-    if not alias then
-        alias = flagname
-    end
-
-    if MPCMD.flags[alias] and MPCMD.flags[alias] ~= flagname then
-        env.error("MPCMD.registerFlag: Changing flag name for an alias is not permitted",false)
-        return
-    end
-    
-    MPCMD.flags[alias] = {flag = flagname, description = description}
-end
-
---------------------------------------------------------------
 -- Callbacks for MPCMD commands
 
 --[[
-MPCMD.cmdShowflags
+MPCMD.cmdFlagList
 
 Display list of registered flags to the named player (if they are in a unit)
 
@@ -58,12 +23,12 @@ Args:
 Returns: 
     nil
 ]]
-MPCMD.cmdShowflags = function(playerName)
+MPCMD.cmdFlagList = function(playerName)
 
     local unitID = MPCMD.getPlayerUnitID(playerName)
 
     if not unitID then
-        env.error("MPCMD.cmdShowflags: Player unit not found",false)
+        env.error("MPCMD.cmdFlagList: Player unit not found",false)
         return
     end
     local displaySeconds = 10
@@ -75,10 +40,56 @@ MPCMD.cmdShowflags = function(playerName)
         if not description then
             description = ""
         end
+        local currentValue = trigger.misc.getUserFlag(v.flag)
+        if currentValue ~= nil then
+            description = "(" .. currentValue .. ") " .. description
+        end
+
         trigger.action.outTextForUnit(unitID, k .. " - " .. description,displaySeconds,false)
     end
 end
 
+--[[
+MPCMD.cmdSetFlag
+
+Update value of a registered flag
+
+Args:	
+	- playerName - string
+    - flagAlias - string or int 
+    - newValue - number
+Returns: 
+    nil
+]]
+MPCMD.cmdSetFlag = function(playerName, flagAlias, newValue)
+
+    if not flagAlias then
+        return
+    end
+
+    local flagData = MPCMD.flags[flagAlias]
+
+    if not flagData then
+        env.error("MPCMD.cmdSetFlag: Flag " .. flagAlias .. " not found or not registered.",false)
+        return
+    end
+    
+    if type(newValue) ~= "number" then
+        env.error("MPCMD.cmdSetFlag: New value must be a number",false)
+        return
+    end
+
+    trigger.action.setUserFlag(flagData.flag , newValue)
+
+    local unitID = MPCMD.getPlayerUnitID(playerName)
+
+    if not unitID then
+        return
+    end
+
+    trigger.action.outTextForUnit(unitID, "Flag " .. flagAlias .. " set to " .. newValue,10,false)
+
+end
 
 --------------------------------------------------------------
 -- Common methods
@@ -95,8 +106,6 @@ Returns:
 ]]
 MPCMD.getPlayerUnitID = function(playerName)
 
-
-    --env.error("Player name " .. playerName ,false)       -- TODO 
     if not playerName then
         env.error("MPCMD.getPlayerUnitID: Invalid player name",false)
         return nil
@@ -104,15 +113,11 @@ MPCMD.getPlayerUnitID = function(playerName)
 
     local units = {}
 
-    --env.error("Coa.BLUE: " .. coalition.side.BLUE ,false)       -- TODO 
-
     for _,coa in pairs(coalition.side) do
-        units = coalition.getPlayers(coa)
-        --env.error("Coa: " .. coa ,false)       -- TODO     
+        units = coalition.getPlayers(coa) 
 
         for k, v in pairs(units) do
-            if v:getPlayerName() == playerName then   
-                --env.error(v:getID(),false)       -- TODO      
+            if v:getPlayerName() == playerName then      
                 return v:getID()
             end
         end 

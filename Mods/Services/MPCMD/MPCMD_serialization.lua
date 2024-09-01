@@ -26,7 +26,11 @@ MPCMD.Serialization = {}
 		Escape reserved characters within 
         a lua string
 --]]------------------------------------------
-MPCMD.Serialization.escapeLuaString = function (str) 
+MPCMD.Serialization.escapeLuaString = function (str, iter) 
+	if iter ~= nil and iter > 1 then
+		str = MPCMD.Serialization.escapeLuaString(str, iter - 1) 
+	end
+	
 	return 
 	string.gsub(string.gsub(string.gsub(string.gsub(str,"\\","\\\\")
 														,"\"","\\\"")

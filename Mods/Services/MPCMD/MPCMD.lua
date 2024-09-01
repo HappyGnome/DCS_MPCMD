@@ -136,7 +136,8 @@ Args:
 	- str - string to parse - (string)
 Returns: 
 	- command (table / nil)
-	- Remaining string (string)
+	- tok (string) command name
+	- Remaining (string)
 ]]
 MPCMD.splitCommand = function(str)
 	local tok,argMsg = MPCMD.splitToken(str)
@@ -145,7 +146,7 @@ MPCMD.splitCommand = function(str)
 
 	tok = string.lower(tok)
 
-	return MPCMD.commands[tok], argMsg
+	return MPCMD.commands[tok], tok, argMsg
 end
 --------------------------------------------------------------
 -- GENERAL MODULE LOGIC
@@ -387,7 +388,7 @@ Returns:
 ]]
 MPCMD.defaultSessionHandler = function(playerId, message)
 
-	local command, argMsg = MPCMD.splitCommand(message)
+	local command, cmd, argMsg = MPCMD.splitCommand(message)
 
 	if (not command) or (command.exec == nil) or (command.nonSession) or (type(command.level) ~= "number") then 
 		net.send_chat_to("Command not recognized",playerId)
@@ -400,7 +401,7 @@ MPCMD.defaultSessionHandler = function(playerId, message)
 
 	if MPCMD.getCurrentPlayerLevel(playerId) >= command.level then
 
-		MPCMD.Logging.log("Player ".. playerId .. " runs command " .. command.cmd)
+		MPCMD.Logging.log("Player ".. playerId .. " runs command " .. cmd)
 
 		return "", command.exec(playerId, argMsg)
 
@@ -435,7 +436,7 @@ Returns:
 ]]
 MPCMD.nonSessionHandler = function(playerId, message)
 
-	local command, argMsg = MPCMD.splitCommand(message)
+	local command, _, argMsg = MPCMD.splitCommand(message)
 
 	if (not command) or (command.exec == nil) or (not command.nonSession) or (type(command.level) ~= "number") then 
 		return message, nil
