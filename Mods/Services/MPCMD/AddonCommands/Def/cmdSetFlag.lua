@@ -4,11 +4,13 @@ MPCMD.cmd =
 
     cmd = "flagset",
 
-    help = "Update a registered flag. Args: <flag alias>, <new value> E.g. flagset f 2. See flagl for a list of aliases in the mission.",
+    help = "Update a registered flag.",
+
+    help2 = " Args: <flag alias>, <new value> | Example: \"flagset f 2\" | See also command flagl",
 
     level = 2,
 
-    exec = function(playerId,argMsg)
+    exec = function(playerId,argMsg,reply)
 
         local playerName = MPCMD.getPlayerName(playerId)
 
@@ -21,37 +23,29 @@ MPCMD.cmd =
         local flagValue = tonumber(tok2)
 
         if tok1 == nil then
-            MPCMD.Logging.log("flag alias not specified")
+            reply.err = "Flag alias not specified"
             return nil
         end
 
         if flagValue == nil then
-            MPCMD.Logging.log("Flag value not specified")
+            reply.err = "Flag value not specified"
             return nil
         end
 
         if playerName then
 
-            playerName = MPCMD.Serialization.escapeLuaString(playerName,2)
+            playerName = MPCMD.Serialization.escapeLuaString(playerName)
 
             local tok1AsNum = tonumber(tok1)
             local flagAlias 
             if tok1AsNum  ~= nil then
                 flagAlias = tok1AsNum
             else
-                flagAlias = [[\"]] .. MPCMD.Serialization.escapeLuaString(tok1,2) .. [[\"]]
+                flagAlias = [["]] .. MPCMD.Serialization.escapeLuaString(tok1) .. [["]]
             end
 
+            MPCMD.safeDoStringInMission([[MPCMD.cmdSetFlag("]] .. playerName .. [[",]] .. flagAlias .. [[,]] .. flagValue .. [[)]])
 
-
-            local execString = 
-            [[
-                a_do_script("MPCMD.cmdSetFlag(\"]] .. playerName .. [[\",]] .. flagAlias .. [[,]] .. flagValue .. [[)")
-            ]]
-            
-            MPCMD.Logging.log("Exec: ".. execString)
-
-            net.dostring_in(MPCMD.scrEnvMission, execString)
         end
 
         return nil -- no special handler

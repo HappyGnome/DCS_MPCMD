@@ -37,7 +37,7 @@ MPCMD.passwordScope =
 
 MPCMD.config = {["users"] = { --[[ [ucid]={level = n, lastSeenUsername = k} ]]},["levels"] = { --[[ [level] = { password = "plaintext", passwordHash = "hashed", passwordScope = n } ]] }, ["options"] = {rateLimitCount = 10, rateLimitSeconds = 60}}
 MPCMD.commandFileDirs = {lfs.writedir()..[[Mods\Services\MPCMD\AddonCommands\Def]]}
-MPCMD.missionInjectDirs = {lfs.writedir()..[[Mods\Services\MPCMD\AddonCommands\MissionInject]]}
+MPCMD.missionInjectDirs = {[1] = lfs.writedir()..[[Mods\Services\MPCMD\AddonCommands\MissionInject\Common]], [2] = lfs.writedir()..[[Mods\Services\MPCMD\AddonCommands\MissionInject]]}
 MPCMD.commands = {}
 MPCMD.sessions = {}
 MPCMD.playerMap = {} -- key = playerId, value = value of config.users[ucid] for the player's ucid
@@ -74,10 +74,10 @@ MPCMD.loadConfiguration = function()
 
 	-- hash passwords
 	for k,v in pairs(MPCMD.config.levels) do
-		if v.password then
+		if v.password and v.password ~= "" then
 			v.passwordHash = net.hash_password(v.password)
 		end
-		v.password = nil
+		v.password = ""
 
 		MPCMD.config.levels[k] = v
 	end
@@ -370,6 +370,64 @@ MPCMD.getCurrentPlayerLevel = function(playerId)
 	return userLevel
 end
 
+--[[ 
+MPCMD.execCommand
+
+Return command.exec(playerId,argMsg), sending any error message back to the user in chat, and also logging it
+
+Args:
+	playerId (number)
+	argMsg (string)
+	command (function(number,string,table) or table with "exec" )
+Returns:
+	custom handler for next chat input, or nil, as returned by command.exec
+]]
+MPCMD.execCommand = function(playerId, argMsg, command)
+
+	local reply ={}
+
+	local result 
+	
+	if type(command) == "table" and command.exec then
+		result  = command.exec(playerId,argMsg,reply)
+	else
+		MPCMD.Logging.log("Command object invalid")
+		return nil
+	end
+
+	if reply.err then
+		net.send_chat_to(reply.err,playerId)	
+		MPCMD.Logging.log("Command failed: " .. reply.err)
+	elseif reply.msg then
+		net.send_chat_to(reply.msg,playerId)	
+	end
+
+	return result
+end
+
+--[[ 
+MPCMD.safeDoStringInMission 
+
+Execute a string in the mission environment with basic error handling
+
+Args:
+	strLua (string)
+Returns:
+	nil
+]]
+MPCMD.safeDoStringInMission = function(strLua)
+
+	local execString = 
+		[[a_do_script("if MPCMD and MPCMD.Common then]] ..
+						[[ MPCMD.Common.safeDoString(\"]] ..
+						  	MPCMD.Serialization.escapeLuaString(strLua,2) ..
+      					[[\")]] .. 
+					[[ end")]]
+	
+	MPCMD.Logging.log("Exec: ".. execString)
+
+	net.dostring_in(MPCMD.scrEnvMission, execString)
+end
 --------------------------------------------------------------
 -- CMD SESSION HANDLERS
 
@@ -403,7 +461,7 @@ MPCMD.defaultSessionHandler = function(playerId, message)
 
 		MPCMD.Logging.log("Player ".. playerId .. " runs command " .. cmd)
 
-		return "", command.exec(playerId, argMsg)
+		return "", MPCMD.execCommand(playerId, argMsg, command)
 
 	elseif levelConfig and levelConfig.passwordHash then
 
@@ -450,7 +508,7 @@ MPCMD.nonSessionHandler = function(playerId, message)
 
 		MPCMD.startSession(playerId)
 		
-		MPCMD.setSessionNextHandler(playerId, command.exec(playerId, argMsg)) -- Simulate command being executed from within a session (this is what happens if a password is required first)
+		MPCMD.setSessionNextHandler(playerId, MPCMD.execCommand(playerId, argMsg, command)) -- Simulate command being executed from within a session (this is what happens if a password is required first)
 
 	elseif levelConfig and levelConfig.passwordHash then
 
@@ -497,14 +555,12 @@ MPCMD.makePasswordHandler = function(playerId, argMsg, levelConfig, command, fai
 			end
 
 			MPCMD.promotePlayer(playerId, command.level, passwordScope)
-
-			if command.exec then
-				return command.exec(inPlayerId, argMsg)
-			end
+				
+			return "", MPCMD.execCommand(inPlayerId, argMsg, command)
 
 		else
 			if failCmd then
-				return failCmd(inPlayerId, argMsg)
+				return "", MPCMD.execCommand(inPlayerId, argMsg, {exec = failCmd})
 			end
 		end
 		return "", nil
@@ -595,7 +651,7 @@ MPCMD.loadCommandFile = function(path)
 		return
 	end
 
-	MPCMD.commands[obj.cmd] = {level = obj.level, exec = obj.exec, cmd = obj.cmd}
+	MPCMD.commands[obj.cmd] = {level = obj.level, exec = obj.exec, cmd = obj.cmd, help = obj.help, help2 = obj.help2}
 end
 
 --[[ 
@@ -801,19 +857,41 @@ Args:
 Returns:
 	nil
 ]]
-MPCMD.cmdHelp = function(playerId)
+MPCMD.cmdHelp = function(playerId, argMsg)
 
-	for k,v in pairs(MPCMD.commands) do
+	local command, cmd
 
-		if type(k) == "string" then 
-			local helpStr = k
-			if type(v.help) == "string" then
-				helpStr = helpStr .. " : " .. v.help
-			end
+	if argMsg then
+		command, cmd, _ = MPCMD.splitCommand (argMsg)
+	end
 
-			net.send_chat_to(helpStr,playerId)
+	local helpStr 
+
+	if command then
+		helpStr = cmd .. " : "
+
+		if command.help then
+			helpStr = helpStr .. command.help .. " : "
 		end
 
+		if command.help2 then
+			helpStr = helpStr .. command.help2
+		end
+
+		net.send_chat_to(helpStr,playerId)
+	else
+		for k,v in pairs(MPCMD.commands) do
+
+			if type(k) == "string" then 
+				helpStr = k
+				if type(v.help) == "string" then
+					helpStr = helpStr .. " : " .. v.help
+				end
+
+				net.send_chat_to(helpStr,playerId)
+			end
+
+		end
 	end
 
 	return nil
@@ -826,7 +904,7 @@ end
 MPCMD.commands = {
 	["cmd"] = {level = 1, exec = MPCMD.cmdSessionStarted, help = "Start mpcmd session.", nonSession = true}
 	, ["x"] = {level = 0, exec = MPCMD.cmdEndSession, help = "Quit mpcmd session.", noRateLimit = true}
-	, ["help"] = {level = 1,exec = MPCMD.cmdHelp, help = "Show command reference."}
+	, ["help"] = {level = 1,exec = MPCMD.cmdHelp, help = "Show command reference. Use help <command> for details on a single command.", help2 = " Args: <command> (optional) \n Example: help flagl \n List commands or give details on a single command."}
 }
 
 --------------------------------------------------------------

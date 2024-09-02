@@ -7,8 +7,8 @@ if not MPCMD then
     MPCMD = {}
 end
 
-if not MPCMD.flags then
-    MPCMD.flags = {}
+if not MPCMD.Flags then
+    MPCMD.Flags = {}
 end
 
 --------------------------------------------------------------
@@ -38,10 +38,16 @@ MPCMD.registerFlag = function(flagname, description, alias)
         alias = flagname
     end
 
-    if MPCMD.flags[alias] and MPCMD.flags[alias] ~= flagname then
+    local spcAt, _ = string.find(alias,"[%s]")
+    if spcAt ~= nil then
+        env.error("MPCMD.registerFlag: Alias cannot contain spaces",false)
+        return
+    end
+
+    if MPCMD.Flags[alias] and MPCMD.Flags[alias] ~= flagname then
         env.error("MPCMD.registerFlag: Changing flag name for an alias is not permitted",false)
         return
     end
     
-    MPCMD.flags[alias] = {flag = flagname, description = description}
+    MPCMD.Flags[alias] = {flag = flagname, description = description}
 end
