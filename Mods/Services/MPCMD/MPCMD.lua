@@ -1,3 +1,19 @@
+--[[
+   Copyright 2024 HappyGnome (https://github.com/HappyGnome)
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+--]]
+
 local _MpcmdVersion = "v1.0"
 
 net.log("MPCMD " .. _MpcmdVersion  .. " loading...")
@@ -23,7 +39,7 @@ require([[MPCMD_logging]])
 MPCMD.Logging.log("MPCMD " .. _MpcmdVersion  .. " loading...")
 
 -----------------------------------------------------------
--- MODULE INIT AND CORE VARIABLES
+-- module init and core variables
 
 if MPCMD == nil then
 	MPCMD = {}
@@ -323,6 +339,8 @@ MPCMD.promotePlayer = function (playerId, newLevel, scope)
 
 	if scope == MPCMD.passwordScope.PER_SESSION and MPCMD.sessions[playerId] then
 
+		MPCMD.Logging.log("Promoting session for player "..playerId.." to level "..newLevel)
+
 		MPCMD.sessions[playerId].level = newLevel
 
 	elseif scope == MPCMD.passwordScope.PER_USER then
@@ -335,8 +353,15 @@ MPCMD.promotePlayer = function (playerId, newLevel, scope)
 
 		userConfig.level = newLevel
 
+		MPCMD.Logging.log("Promoting player "..playerId.." to level "..newLevel)
+
 		-- Complete user config and save
 		MPCMD.setUserConfig(playerId, userConfig)
+
+		if MPCMD.sessions[playerId] then -- Promote player for current session too
+			MPCMD.sessions[playerId].level = newLevel
+		end
+
 	end
 
 end
@@ -389,6 +414,12 @@ MPCMD.execCommand = function(playerId, argMsg, command)
 	local result 
 	
 	if type(command) == "table" and command.exec then
+		if command.cmd then
+			local cmdStartMsg = "<< " .. command.cmd
+
+			net.send_chat_to(cmdStartMsg,playerId)
+		end
+
 		result  = command.exec(playerId,argMsg,reply)
 	else
 		MPCMD.Logging.log("Command object invalid")
@@ -517,7 +548,7 @@ MPCMD.nonSessionHandler = function(playerId, message)
 
 			net.send_chat_to("Password incorrect",id)
 
-			return nil
+			return nil -- TODO: add something here to allow repeated attempts (prevent accidentally retrying and sending the pwd in chat)
 		end
 		
 		MPCMD.startSession(playerId, MPCMD.makePasswordHandler(playerId, argMsg,  levelConfig, command, failCmd))
@@ -554,7 +585,7 @@ MPCMD.makePasswordHandler = function(playerId, argMsg, levelConfig, command, fai
 				passwordScope = levelConfig.passwordScope
 			end
 
-			MPCMD.promotePlayer(playerId, command.level, passwordScope)
+			MPCMD.promotePlayer(inPlayerId, command.level, passwordScope)
 				
 			return "", MPCMD.execCommand(inPlayerId, argMsg, command)
 
@@ -755,6 +786,10 @@ MPCMD.doOnPlayerTrySendChat = function(playerId, message)
 			result, newHandler = MPCMD.safeCall(MPCMD.defaultSessionHandler, playerId, message)
 		end
 
+		if (not newHandler) and MPCMD.sessions[playerId] then -- When a command completes (but still within a session)
+			net.send_chat_to(">>",playerId)
+		end
+
 		MPCMD.setSessionNextHandler(playerId, newHandler)
 	else
 		result, _ = MPCMD.safeCall(MPCMD.nonSessionHandler, playerId, message)
@@ -818,7 +853,7 @@ Returns:
 ]]
 MPCMD.cmdSessionStarted = function(playerId)
 
-	net.send_chat_to("<< MPCMD session start >>",playerId)
+	net.send_chat_to("|| MPCMD session start >>",playerId)
 
 	MPCMD.Logging.log("Start cmd session for player " .. playerId)
 
@@ -840,7 +875,7 @@ MPCMD.cmdEndSession = function(playerId)
 
 	MPCMD.stopSession(playerId)
 
-	net.send_chat_to("<< MPCMD session end >>",playerId)
+	net.send_chat_to("<< MPCMD session end ||",playerId)
 
 	MPCMD.Logging.log("End cmd session for player " .. playerId)
 
@@ -903,7 +938,7 @@ end
 
 MPCMD.commands = {
 	["cmd"] = {level = 1, exec = MPCMD.cmdSessionStarted, help = "Start mpcmd session.", nonSession = true}
-	, ["x"] = {level = 0, exec = MPCMD.cmdEndSession, help = "Quit mpcmd session.", noRateLimit = true}
+	, ["q"] = {level = 0, exec = MPCMD.cmdEndSession, help = "Quit mpcmd session.", noRateLimit = true}
 	, ["help"] = {level = 1,exec = MPCMD.cmdHelp, help = "Show command reference. Use help <command> for details on a single command.", help2 = " Args: <command> (optional) \n Example: help flagl \n List commands or give details on a single command."}
 }
 
