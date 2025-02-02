@@ -937,7 +937,7 @@ end
 -- REGISTER DEFAULT COMMANDS
 
 MPCMD.commands = {
-	["cmd"] = {level = 1, exec = MPCMD.cmdSessionStarted, help = "Start mpcmd session.", nonSession = true}
+	["cmd"] = {level = 1, exec = MPCMD.cmdSessionStarted, help = "Start mpcmd session.", nonSession = true} -- TODO: make the levels for these commands configurable
 	, ["q"] = {level = 0, exec = MPCMD.cmdEndSession, help = "Quit mpcmd session.", noRateLimit = true}
 	, ["help"] = {level = 1,exec = MPCMD.cmdHelp, help = "Show command reference. Use help <command> for details on a single command.", help2 = " Args: <command> (optional) \n Example: help flagl \n List commands or give details on a single command."}
 }
