@@ -164,6 +164,43 @@ MPCMD.splitCommand = function(str)
 
 	return MPCMD.commands[tok], tok, argMsg
 end
+
+--[[
+MPCMD.flipTable
+
+Args:
+	- tbl - table whose keys and values will be flipped
+Returns:
+	- Table whose keys and values are the values and keys from tbl, respectively
+--]]
+MPCMD.flipTable = function(tbl)
+	local flip = {}
+
+	for k,v in pairs(tbl) do
+		flip[v]=k
+	end
+
+	return flip
+end
+
+--[[
+MPCMD.sortKeys
+
+Args:
+	- tbl - table whose keys will be sorted
+Returns:
+	- Table with numerical indices, values are sorted keys from tbl	
+--]]
+MPCMD.sortKeys = function(tbl)
+	local sortedKey = {}
+
+	for k,v in pairs(tbl) do
+		sortedKey[#sortedKey+1] = k 
+	end
+	table.sort(sortedKey)
+
+	return sortedKey
+end
 --------------------------------------------------------------
 -- GENERAL MODULE LOGIC
 
@@ -498,7 +535,7 @@ MPCMD.defaultSessionHandler = function(playerId, message)
 
 		local failCmd = function(id,msg)
 
-			net.send_chat_to("Password incorrect",id)
+			net.send_chat_to("Authorization quit",id)
 
 			return nil
 		end
@@ -546,12 +583,12 @@ MPCMD.nonSessionHandler = function(playerId, message)
 		local failCmd = function(id,msg)
 			MPCMD.stopSession(id)
 
-			net.send_chat_to("Password incorrect",id)
+			net.send_chat_to("Authorization quit ||",id)
 
-			return nil -- TODO: add something here to allow repeated attempts (prevent accidentally retrying and sending the pwd in chat)
+			return nil 
 		end
 		
-		MPCMD.startSession(playerId, MPCMD.makePasswordHandler(playerId, argMsg,  levelConfig, command, failCmd))
+		MPCMD.startSession(playerId, MPCMD.makePasswordHandler(playerId, argMsg,  levelConfig, command, failCmd, "|| "))
 	else
 		net.send_chat_to("Unauthorized",playerId)
 	end
@@ -573,11 +610,24 @@ Args:
 Returns:
 	handler function (function - same spec as MPCMD.nonSessionHandler)
 ]]
-MPCMD.makePasswordHandler = function(playerId, argMsg, levelConfig, command, failCmd)
-	net.send_chat_to("Enter password >> ",playerId)
+MPCMD.makePasswordHandler = function(playerId, argMsg, levelConfig, command, failCmd, blockPrefix)
+	local quitChar = 'q'
 
-	local inputHandler = function(inPlayerId, message)
-		if net.check_password(message, levelConfig.passwordHash) then
+	if not blockPrefix then
+		blockPrefix = ""
+	end
+
+	local prompt = "Password ('" .. quitChar .. "' to quit)>> "
+	net.send_chat_to(blockPrefix .. prompt,playerId)
+
+	local inputHandler
+
+	inputHandler = function(inPlayerId, message)
+		if message == quitChar then
+			if failCmd then
+				return "", MPCMD.execCommand(inPlayerId, argMsg, {exec = failCmd})
+			end
+		elseif (not MPCMD.blockForRate(playerId)) and net.check_password(message, levelConfig.passwordHash) then
 
 			local passwordScope = MPCMD.passwordScope.PER_SESSION
 
@@ -589,12 +639,11 @@ MPCMD.makePasswordHandler = function(playerId, argMsg, levelConfig, command, fai
 				
 			return "", MPCMD.execCommand(inPlayerId, argMsg, command)
 
-		else
-			if failCmd then
-				return "", MPCMD.execCommand(inPlayerId, argMsg, {exec = failCmd})
-			end
 		end
-		return "", nil
+
+		net.send_chat_to(prompt,playerId)
+
+		return "", inputHandler -- Default retry
 	end
 
 	return inputHandler
@@ -915,7 +964,11 @@ MPCMD.cmdHelp = function(playerId, argMsg)
 
 		net.send_chat_to(helpStr,playerId)
 	else
-		for k,v in pairs(MPCMD.commands) do
+		local sortedKey = MPCMD.sortKeys(MPCMD.commands)
+
+		for _,k in ipairs(sortedKey) do
+
+			local v = MPCMD.commands[k] 
 
 			if type(k) == "string" then 
 				helpStr = k

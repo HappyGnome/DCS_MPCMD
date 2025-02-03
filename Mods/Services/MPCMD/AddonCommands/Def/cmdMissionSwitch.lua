@@ -23,6 +23,7 @@ MPCMD.cmd =
     level = 2,
 
     exec = function(playerId,argMsg)
+        local quitChar = 'q'
         local net = require('net')        
 
         local msnlRaw = net.missionlist_get().missionList
@@ -30,11 +31,7 @@ MPCMD.cmd =
         local msnlRev = {}
         
         -- Removes duplicates
-        for i,v in ipairs(msnlRaw) do
-            if not msnlRev[v] then
-                msnlRev[v]=i   
-            end
-        end
+        msnlRev = MPCMD.flipTable(MPCMD.flipTable(msnlRaw))
 
         local stripFileNameBody = function (strPath)
             local _,_, fname = string.find(strPath,"([^\\/:]*)$")
@@ -51,17 +48,21 @@ MPCMD.cmd =
         local msgStr = "Index : Mission Name"
         net.send_chat_to(msgStr,playerId)
 
-		for k,v in pairs(msnlRev) do
+		local sortedKey = MPCMD.sortKeys(msnlRev)
 
-			if type(k) == "string" then 
-				msgStr = v .. " : " .. stripFileNameBody(k) 
+		for _,k in ipairs(sortedKey) do
+
+            v = msnlRev[k]
+
+			if type(v) == "string" then 
+				msgStr = k .. " : " .. stripFileNameBody(v) 
 
                 net.send_chat_to(msgStr,playerId)
 			end
 
 		end
 
-        msgStr = "Select index (or 'q' to quit):"
+        msgStr = "Select index (or '" .. quitChar .. "' to quit):"
 
         net.send_chat_to(msgStr,playerId)
 
@@ -79,7 +80,7 @@ MPCMD.cmd =
 
             local indStr  = MPCMD.splitToken(message)
 
-            if not indStr or indStr == 'q' then 
+            if not indStr or indStr == quitChar then 
                 return "",nil
             end
 
